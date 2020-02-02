@@ -1,0 +1,240 @@
+pipeline {
+    agent any
+   
+tools {
+    nodejs 'node8.9.4'
+}
+
+environment {
+    GITURL = 'https://github.com/theatulverma/git.git'
+    MYSQL_DRIVER_VER = '5.1.47'
+}
+
+parameters {
+        choice(
+            choices: ['DEV' , 'QA', 'UAT', 'Prod'],
+            description: '',
+            name: 'ENVIRONMENT')
+choice(
+choices: ['release', 'hotfix', 'feature', 'Bugfix', 'Feature', 'bugfix', 'tags'],
+description: 'Code Repo Branch/Tag Origin path/folder',
+name: 'CODE_ORIGIN')
+    string(
+defaultValue: 'development',
+description: 'development',
+name: 'BRANCH')
+    }
+   
+    stages {
+       
+        stage ('GIT') {
+ 
+  steps{
+
+  checkout([$class: 'GitSCM', branches: [[name: ' ${BRANCH}']],  doGenerateSubmoduleConfigurations: false, extensions: [[$class: 'RelativeTargetDirectory', relativeTargetDir: 'dcp']], submoduleCfg: [], userRemoteConfigs: [[credentialsId: 'LL', url: 'https://del.tools.publicis.sapient.com/bitbucket/scm/dcp/dcp_ui.git']]])
+   
+  checkout changelog: false, poll: true, scm: [$class: 'GitSCM', branches: [[name: 'test_url_poc']], doGenerateSubmoduleConfigurations: false, extensions: [[$class: 'RelativeTargetDirectory', relativeTargetDir: 'scripts']], submoduleCfg: [], userRemoteConfigs: [[credentialsId: 'LL', url: 'https://del.tools.publicis.sapient.com/bitbucket/scm/dcp/dcp_build_release.git']]]
+ 
+  }
+        }
+       
+        stage ('TAG info') {
+steps {
+sh '''set -x
+if [ $CODE_ORIGIN == "tags" ];then
+CODE_TAG_CREATION="FALSE"
+CODE_TAG_NAME="$BRANCH"
+else
+CODE_TAG_CREATION="TRUE"
+CODE_TAG_NAME="None"        
+fi
+
+echo "$CODE_TAG_CREATION" > code-tag-info.txt
+echo "$CODE_TAG_NAME" > code-tag-name.txt
+'''
+script {
+// trim removes leading and trailing whitespace from the string
+CODE_TAG_CREATION = readFile 'code-tag-info.txt'.trim()
+CODE_TAG_NAME = readFile 'code-tag-name.txt'.trim()
+}
+}
+}
+       
+        stage ('Initialize_DEV_Deployment') {
+                 
+when {
+ environment name: 'ENVIRONMENT', value: 'DEV'
+}
+
+  steps {
+           sh '''
+           cd dcp  
+           pwd
+  #sh -x $WORKSPACE/scripts/ui_build.sh coreApp dev /contentdynamics/
+   '''
+}
+        }
+
+stage('S3 Bucket Invalidation Dev') {
+when {
+ environment name: 'ENVIRONMENT', value: 'DEV'
+}
+steps {
+sh '''
+   cd dcp
+#sh -x $WORKSPACE/UI_Build/scripts/check_script.sh pmcd-url-web-app E2PA7JDEZ0VM6L dev coreApp /contentdynamics/
+'''
+  }
+              }
+
+        stage ('Initialize_QA_Deployment') {
+       
+when {
+ environment name: 'ENVIRONMENT', value: 'QA'
+}
+
+steps {
+  sh '''
+echo "Proceeding with QA "
+cd dcp
+#sh -x $WORKSPACE/UI_Build/scripts/ui_build.sh coreApp dev /contentdynamics/
+'''
+}
+        }
+
+stage('S3 Bucket Invalidation QA') {
+when {
+ environment name: 'ENVIRONMENT', value: 'QA'
+}
+steps {
+sh '''
+   cd dcp
+echo "Proceeding with QA Invalidation "
+#sh -x $WORKSPACE/UI_Build/scripts/check_script.sh pmcd-qa-contentdynamics E2X6WF7BFOKWOC qa coreApp /contentdynamics/
+'''
+  }
+              }
+stage ('Initialize_UAT_Deployment') {
+       
+when {
+ environment name: 'ENVIRONMENT', value: 'UAT'
+}
+
+steps {
+  sh '''
+sh -x $WORKSPACE/UI_Build/scripts/ui_build.sh coreApp uat /contentdynamics/
+'''
+}
+        }
+
+stage('S3 Bucket Invalidation UAT') {
+when {
+ environment name: 'ENVIRONMENT', value: 'UAT'
+}
+steps {
+sh '''
+   cd dcp
+sh -x $WORKSPACE/UI_Build/scripts/check_script.sh pmcd-uat-contentdynamics E14E8OEASRWHFJ uat coreApp /contentdynamics/
+'''
+  }
+              }
+
+stage ('Initialize_PROD_Deployment') {
+       
+when {
+ environment name: 'ENVIRONMENT', value: 'PROD'
+}
+
+steps {
+  sh '''
+sh -x $WORKSPACE/UI_Build/scripts/ui_build.sh coreApp production /contentdynamics/
+'''
+}
+}
+       
+stage('S3 Bucket Invalidation PROD') {
+when {
+ environment name: 'ENVIRONMENT', value: 'PROD'
+}
+steps {
+sh '''
+   cd dcp
+sh -x $WORKSPACE/UI_Build/scripts/check_script.sh pmcd-peod-contentdynamics E14E8OEASRWHFJ production coreApp /contentdynamics/
+'''
+  }
+              }
+
+
+stage ('Create TAG for Code Repositories') {
+   environment {
+                GIT_AUTH = credentials('LL')
+            }
+when {
+environment name: 'ENVIRONMENT', value: 'DEV'
+}
+        steps {
+                         
+                  sh '''set -x
+ cd dcp
+   echo "====== Running Code Tag Creation ======="
+                  TAG_DIRECTORY=/tmp/BUILD_TAG
+                  if [ -f $TAG_DIRECTORY/${BRANCH}/ui_tag_num.txt ]
+                  then
+                    PREV_NUM=`cat $TAG_DIRECTORY/${BRANCH}/ui_tag_num.txt`
+                    NEW_NUM=`expr $PREV_NUM + 1`
+                  else
+                      mkdir -p $TAG_DIRECTORY/${BRANCH}
+                      echo 0 > $TAG_DIRECTORY/${BRANCH}/ui_tag_num.txt
+                      PREV_NUM=`cat $TAG_DIRECTORY/${BRANCH}/ui_tag_num.txt`
+                      NEW_NUM=`expr $PREV_NUM + 1`
+                  fi
+
+                  echo $NEW_NUM > $TAG_DIRECTORY/${BRANCH}/ui_tag_num.txt
+                  BUILDNUM=`cat $TAG_DIRECTORY/${BRANCH}/ui_tag_num.txt`
+                  TAG=${BRANCH}-CODE-TAG-$BUILDNUM
+ echo ${TAG}
+                  ## Below is done to convert the TAG which can be used a lable for Google Image, as Google Image does not support Upper Case and '.'
+                  TAG=`echo ${TAG} | sed -E "s/[^a-zA-Z0-9-]/-/g" | cut -c 1-62 | awk '{print tolower($0)}'`
+                  #if [ "${TAG: -1}" == '-' ];then TAG=`echo ${TAG}`; fi
+
+                  echo "${TAG}" > CODE_TAG_INFO.txt
+
+                  echo "created on `date` with tag ${TAG} and branch ${BRANCH} " >> $TAG_DIRECTORY/${BRANCH}/tag_info.txt
+                  #Code Build TAG
+                  git tag -l ${TAG}
+                  sleep 10
+                  git tag -a -f -m "Tagging on ${BRANCH} : ${TAG}" ${TAG}
+                  sleep 10
+ echo "Pushing Tag"
+ git config --local credential.helper "!f() { echo username=\\$GIT_AUTH_USR; echo password=\\$GIT_AUTH_PSW; }; f"
+                  git push https://github.com/theatulverma/git.git ${TAG}
+
+                  echo "$TAG" > CODE_TAG_INFO.txt
+ echo "${CODE_TAG_NAME}"
+                  '''
+                 
+                  }
+                 
+            }
+         
+
+
+        stage('Cleaning Workspace'){
+            steps {
+              sh '''set -x
+ echo "${CODE_TAG_NAME}"
+ echo "${TAG}"
+ '''
+ cleanWs()
+             }
+}
+}
+
+post {
+        failure {
+        mail to: 'er.atulverma@hotmail.com',
+             subject: "Failed Pipeline for ${ENVIRONMENT}: ${currentBuild.fullDisplayName}",
+             body: "Status of last build: FAILED  \r\n Something is wrong with ${env.BUILD_URL}"
+}
+}
+}
