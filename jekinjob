@@ -1,0 +1,108 @@
+pipeline {
+    agent any
+    tools {
+    nodejs 'node8.9.4'
+  }
+parameters {
+        choice(
+            choices: ['DEV' , 'QA', 'UAT', 'Prod'],
+            description: '',
+            name: 'ENVIRONMENT')
+    string(
+defaultValue: 'dev/sprint34',
+description: 'dev/sprint34',
+name: 'BRANCH')
+    }
+    stages {
+       
+        stage ('GIT') {
+ 
+  steps{
+
+ 
+  checkout([$class: 'GitSCM', branches: [[name: ' ${BRANCH}']],  doGenerateSubmoduleConfigurations: false, extensions: [[$class: 'RelativeTargetDirectory', relativeTargetDir: 'dcp']], submoduleCfg: [], userRemoteConfigs: [[credentialsId: 'LL', url: 'https://del.tools.publicis.sapient.com/bitbucket/scm/dcp/dcp_ui.git']]])
+ 
+
+ 
+  checkout changelog: false, poll: true, scm: [$class: 'GitSCM', branches: [[name: 'test_url_poc']], doGenerateSubmoduleConfigurations: false, extensions: [[$class: 'RelativeTargetDirectory', relativeTargetDir: 'scripts']], submoduleCfg: [], userRemoteConfigs: [[credentialsId: 'LL', url: 'https://del.tools.publicis.sapient.com/bitbucket/scm/dcp/dcp_build_release.git']]]
+ 
+  }
+        }
+       
+       
+       
+        stage ('Initialize_DEV_Deployment') {
+                 
+when {
+ environment name: 'ENVIRONMENT', value: 'DEV'
+}
+
+  steps {
+           sh '''
+           cd dcp  
+           pwd
+  sh -x /var/lib/jenkins/workspace/UI_Build/scripts/ui_build.sh coreApp dev /contentdynamics/
+   '''
+}
+        }
+
+stage('S3 Bucket Invalidation Dev') {
+when {
+ environment name: 'ENVIRONMENT', value: 'DEV'
+}
+steps {
+sh '''
+   cd dcp
+sh -x /var/lib/jenkins/workspace/UI_Build//scripts/check_script.sh pmcd-url-web-app E2PA7JDEZ0VM6L dev coreApp /contentdynamics/
+'''
+  }
+              }
+
+        stage ('Initialize_QA_Deployment') {
+       
+when {
+ environment name: 'ENVIRONMENT', value: 'QA'
+}
+
+steps {
+  sh '''
+echo ${ENVIRONMENT}
+'''
+}
+        }
+
+stage ('Initialize_UAT_Deployment') {
+       
+when {
+ environment name: 'ENVIRONMENT', value: 'UAT'
+}
+
+steps {
+  sh '''
+testecho ${ENVIRONMENT}
+'''
+}
+        }
+
+stage ('Initialize_PROD_Deployment') {
+       
+when {
+ environment name: 'ENVIRONMENT', value: 'PROD'
+}
+
+steps {
+  sh '''
+echo ${ENVIRONMENT}
+'''
+}
+        }
+}
+
+post {
+        failure {
+        mail to: 'er.atulverma@outlook.com',
+             subject: "Failed Pipeline: ${currentBuild.fullDisplayName}",
+             body: "Status of last build: FAILED  \r\n Something is wrong with ${env.BUILD_URL}"
+}
+}
+    }
